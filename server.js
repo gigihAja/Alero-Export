@@ -55,26 +55,44 @@ app.post(
           try {
             await fs.unlink(uploadedFile.path);
           } catch {
-            // ignore delete error
+            // ignore
           }
 
           if (error) {
+            console.error('JAVA ERROR:', error);
+            console.error('JAVA STDOUT:', stdout);
+            console.error('JAVA STDERR:', stderr);
+
             return res.status(500).json({
+              success: false,
               error: 'Token generator failed',
-              details: stderr || error.message
+              details: {
+                message: error.message,
+                exitCode: error.code,
+                stdout: stdout,
+                stderr: stderr
+              }
             });
           }
 
           const match = stdout.match(/eyJ[A-Za-z0-9._-]+/);
 
           if (!match) {
+            console.error('TOKEN NOT FOUND');
+            console.error('JAVA STDOUT:', stdout);
+            console.error('JAVA STDERR:', stderr);
+
             return res.status(500).json({
+              success: false,
               error: 'Access token not found',
-              output: stdout
+              details: {
+                stdout: stdout,
+                stderr: stderr
+              }
             });
           }
 
-          res.json({
+          return res.json({
             success: true,
             token: match[0]
           });
