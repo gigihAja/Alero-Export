@@ -21,6 +21,64 @@ app.get('/', (req, res) => {
   });
 });
 
+
+// ======================================================
+// Fetch all Alero users with automatic pagination
+// ======================================================
+
+async function fetchAllAleroUsers(token) {
+  const allUsers = [];
+
+  const limit = 100;
+  let offset = 0;
+
+  while (true) {
+    const url =
+      `https://api.alero.eu/v2-edge/users/?limit=${limit}&offset=${offset}`;
+
+    console.log(`Fetching Alero users: offset=${offset}`);
+
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/json'
+      }
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+
+      throw new Error(
+        `Alero API failed: ${response.status} ${response.statusText}\n${errorText}`
+      );
+    }
+
+    const data = await response.json();
+
+    const users = data.users ?? [];
+
+    allUsers.push(...users);
+
+    console.log(
+      `Received ${users.length} users. Total: ${allUsers.length}`
+    );
+
+    if (users.length < limit) {
+      break;
+    }
+
+    offset += limit;
+  }
+
+  return allUsers;
+}
+
+
+// ======================================================
+// Existing endpoint: Generate Token
+// ======================================================
+
 app.post(
   '/generate-token',
   upload.single('serviceAccount'),
@@ -45,7 +103,10 @@ app.post(
         'java',
         [
           '-jar',
-          path.join(process.cwd(), 'public-api-auth-helper-1.0.422.jar'),
+          path.join(
+            process.cwd(),
+            'public-api-auth-helper-1.0.422.jar'
+          ),
           '-t',
           tenantId,
           '-p',
@@ -75,7 +136,8 @@ app.post(
             });
           }
 
-          const match = stdout.match(/eyJ[A-Za-z0-9._-]+/);
+          const match =
+            stdout.match(/eyJ[A-Za-z0-9._-]+/);
 
           if (!match) {
             console.error('TOKEN NOT FOUND');
@@ -111,6 +173,129 @@ app.post(
     }
   }
 );
+
+
+// ======================================================
+// New endpoint: Generate token + fetch all users
+// ======================================================
+
+app.post(
+  '/export-users',
+  upload.single('serviceAccount'),
+  async (req, res) => {
+    const tenantId = req.body.tenantId;
+    const uploadedFile = req.file;
+
+    if (!tenantId) {
+      return res.status(400).json({
+        success: false,
+        error: 'tenantId is required'
+      });
+    }
+
+    if (!uploadedFile) {
+      return res.status(400).json({
+        success: false,
+        error: 'serviceAccount JSON is required'
+      });
+    }
+
+    try {
+      execFile(
+        'java',
+        [
+          '-jar',
+          path.join(
+            process.cwd(),
+            'public-api-auth-helper-1.0.422.jar'
+          ),
+          '-t',
+          tenantId,
+          '-p',
+          uploadedFile.path
+        ],
+        async (error, stdout, stderr) => {
+          try {
+            await fs.unlink(uploadedFile.path);
+          } catch {
+            // ignore
+          }
+
+          if (error) {
+            console.error('JAVA ERROR:', error);
+            console.error('JAVA STDOUT:', stdout);
+            console.error('JAVA STDERR:', stderr);
+
+            return res.status(500).json({
+              success: false,
+              error: 'Token generator failed',
+              details: {
+                message: error.message,
+                exitCode: error.code,
+                stdout: stdout,
+                stderr: stderr
+              }
+            });
+          }
+
+          const match =
+            stdout.match(/eyJ[A-Za-z0-9._-]+/);
+
+          if (!match) {
+            console.error('TOKEN NOT FOUND');
+            console.error('JAVA STDOUT:', stdout);
+            console.error('JAVA STDERR:', stderr);
+
+            return res.status(500).json({
+              success: false,
+              error: 'Access token not found',
+              details: {
+                stdout: stdout,
+                stderr: stderr
+              }
+            });
+          }
+
+          const token = match[0];
+
+          try {
+            const users =
+              await fetchAllAleroUsers(token);
+
+            return res.json({
+              success: true,
+              total: users.length,
+              users: users
+            });
+          } catch (apiError) {
+            console.error(
+              'ALERO API ERROR:',
+              apiError
+            );
+
+            return res.status(500).json({
+              success: false,
+              error: 'Failed to fetch Alero users',
+              details: apiError.message
+            });
+          }
+        }
+      );
+    } catch (error) {
+      try {
+        await fs.unlink(uploadedFile.path);
+      } catch {
+        // ignore
+      }
+
+      return res.status(500).json({
+        success: false,
+        error: error.message
+      });
+    }
+  }
+);
+
 
 const PORT = process.env.PORT || 3000;
 
